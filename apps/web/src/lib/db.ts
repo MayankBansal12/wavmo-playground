@@ -95,39 +95,56 @@ export async function saveChat(
 	messages: PersistedChatMessage[],
 ): Promise<void> {
 	const db = getDB();
-	const existing = await db.chat.get(CHAT_ID);
-	await db.chat.put({
-		id: CHAT_ID,
-		messages,
-		sessionId: existing?.sessionId || crypto.randomUUID(),
-		updatedAt: Date.now(),
+	await db.transaction("rw", db.chat, async () => {
+		const existing = await db.chat.get(CHAT_ID);
+		await db.chat.update(CHAT_ID, {
+			messages,
+			updatedAt: Date.now(),
+		});
+		if (!existing) {
+			await db.chat.put({
+				id: CHAT_ID,
+				messages,
+				sessionId: crypto.randomUUID(),
+				updatedAt: Date.now(),
+			});
+		}
 	});
 }
 
 export async function loadSessionId(): Promise<string> {
 	const db = getDB();
-	const existing = await db.chat.get(CHAT_ID);
-	if (existing?.sessionId) return existing.sessionId;
+	return db.transaction("rw", db.chat, async () => {
+		const existing = await db.chat.get(CHAT_ID);
+		if (existing?.sessionId) return existing.sessionId;
 
-	const sessionId = crypto.randomUUID();
-	await db.chat.put({
-		id: CHAT_ID,
-		messages: existing?.messages ?? [],
-		sessionId,
-		updatedAt: Date.now(),
+		const sessionId = crypto.randomUUID();
+		await db.chat.put({
+			id: CHAT_ID,
+			messages: existing?.messages ?? [],
+			sessionId,
+			updatedAt: Date.now(),
+		});
+		return sessionId;
 	});
-	return sessionId;
 }
 
 export async function resetSessionId(): Promise<string> {
 	const db = getDB();
 	const sessionId = crypto.randomUUID();
-	const existing = await db.chat.get(CHAT_ID);
-	await db.chat.put({
-		id: CHAT_ID,
-		messages: existing?.messages ?? [],
-		sessionId,
-		updatedAt: Date.now(),
+	await db.transaction("rw", db.chat, async () => {
+		const updated = await db.chat.update(CHAT_ID, {
+			sessionId,
+			updatedAt: Date.now(),
+		});
+		if (!updated) {
+			await db.chat.put({
+				id: CHAT_ID,
+				messages: [],
+				sessionId,
+				updatedAt: Date.now(),
+			});
+		}
 	});
 	return sessionId;
 }
