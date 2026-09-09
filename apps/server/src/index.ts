@@ -37,6 +37,12 @@ const rateLimitOptions = {
 
 const rateLimit = buildRateLimit(rateLimitOptions);
 
+const normalizeSessionId = (value: unknown): string | undefined => {
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return /^[a-zA-Z0-9_-]{8,128}$/.test(trimmed) ? trimmed : undefined;
+};
+
 fastify.get("/api/chat/quota", async (request, reply) => {
 	let redis: Redis;
 	try {
@@ -76,9 +82,10 @@ fastify.get("/api/chat/quota", async (request, reply) => {
 
 fastify.post("/api/chat", { preHandler: rateLimit }, async (request, reply) => {
 	try {
-		const { userPrompt, currentDocument } = request.body as {
+		const { userPrompt, currentDocument, sessionId } = request.body as {
 			userPrompt: string;
 			currentDocument?: string;
+			sessionId?: string;
 		};
 		if (!userPrompt) {
 			return reply.status(400).send({
@@ -86,7 +93,13 @@ fastify.post("/api/chat", { preHandler: rateLimit }, async (request, reply) => {
 			});
 		}
 
-		const agentResponse = await runWritingWorkflow(userPrompt, currentDocument);
+		const agentResponse = await runWritingWorkflow(
+			userPrompt,
+			currentDocument,
+			{
+				sessionId: normalizeSessionId(sessionId),
+			},
+		);
 		if (!agentResponse) {
 			return reply.status(500).send({
 				error: "",
@@ -105,23 +118,32 @@ fastify.post("/api/chat", { preHandler: rateLimit }, async (request, reply) => {
 
 const streamQueue = new Map<
 	string,
-	{ userPrompt: string; currentDocument?: string }
+	{
+		userPrompt: string;
+		currentDocument?: string;
+		sessionId?: string;
+	}
 >();
 
 fastify.post(
 	"/api/chat/stream/init",
 	{ preHandler: rateLimit },
 	async (request, reply) => {
-		const { userPrompt, currentDocument } = request.body as {
+		const { userPrompt, currentDocument, sessionId } = request.body as {
 			userPrompt: string;
 			currentDocument?: string;
+			sessionId?: string;
 		};
 		if (!userPrompt) {
 			return reply.status(400).send({ error: "userPrompt is required" });
 		}
 
 		const streamId = randomUUID();
-		streamQueue.set(streamId, { userPrompt, currentDocument });
+		streamQueue.set(streamId, {
+			userPrompt,
+			currentDocument,
+			sessionId: normalizeSessionId(sessionId),
+		});
 		fastify.log.info(
 			{
 				route: "/api/chat/stream/init",
@@ -222,6 +244,7 @@ fastify.get("/api/chat/stream", async (request, reply) => {
 			queued.currentDocument,
 			{
 				streamId,
+				sessionId: queued.sessionId,
 				log: fastify.log,
 			},
 			(event) => {

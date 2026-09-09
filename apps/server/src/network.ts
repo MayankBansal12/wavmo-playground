@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createEditPrompt } from "./helpers/prompts/edit";
 import { createImprovementPrompt } from "./helpers/prompts/improvement";
 import { createPlanningPrompt } from "./helpers/prompts/planning";
@@ -42,12 +43,14 @@ type WorkflowLogger = Pick<Console, "info" | "warn" | "error">;
 
 interface WorkflowContext {
 	streamId?: string;
+	sessionId?: string;
 	log?: WorkflowLogger;
 }
 
 const openCodeEndpoint =
 	process.env.OPENCODE_API_BASE_URL || "https://opencode.ai/zen/go/v1";
 const openCodeApiKey = process.env.OPENCODE_API_KEY || "";
+const openCodeUserAgent = process.env.OPENCODE_USER_AGENT || "wavmo-server/1.0";
 
 const usesAnthropicMessagesApi = (model: string) =>
 	model.startsWith("minimax-") || model.startsWith("qwen3.");
@@ -78,7 +81,11 @@ const extractTextContent = (content: unknown): string => {
 const snippet = (value: string, length = 500) =>
 	value.length > length ? `${value.slice(0, length)}…` : value;
 
-const invokeAgent = async (model: string, prompt: string): Promise<string> => {
+const invokeAgent = async (
+	model: string,
+	prompt: string,
+	sessionId: string,
+): Promise<string> => {
 	if (!openCodeApiKey) {
 		throw new Error("OPENCODE_API_KEY is not configured");
 	}
@@ -91,6 +98,8 @@ const invokeAgent = async (model: string, prompt: string): Promise<string> => {
 			headers: {
 				"Content-Type": "application/json",
 				Authorization: `Bearer ${openCodeApiKey}`,
+				"User-Agent": openCodeUserAgent,
+				"x-opencode-session": sessionId,
 				...(usesMessagesApi
 					? {
 							"x-api-key": openCodeApiKey,
@@ -298,11 +307,12 @@ const withFallback = async (
 	primary: string,
 	fallback: string,
 	prompt: string,
+	sessionId: string,
 ): Promise<string> => {
 	try {
-		return await invokeAgent(primary, prompt);
+		return await invokeAgent(primary, prompt, sessionId);
 	} catch {
-		return await invokeAgent(fallback, prompt);
+		return await invokeAgent(fallback, prompt, sessionId);
 	}
 };
 
@@ -496,7 +506,8 @@ export async function runWritingWorkflow(
 		log?.error?.({ streamId, ...extra }, message);
 
 	const workflowStartedAt = Date.now();
-	logInfo("workflow planning started");
+	const sessionId = context?.sessionId || randomUUID();
+	logInfo("workflow planning started", { sessionId });
 
 	const planningPrompt = createPlanningPrompt(currentDocument, userPrompt);
 	let planningResponse: string;
@@ -509,6 +520,7 @@ export async function runWritingWorkflow(
 			modelRoutes.planning.primary,
 			modelRoutes.planning.fallback,
 			planningPrompt,
+			sessionId,
 		);
 		logInfo("planning agent call completed", {
 			responseLength: planningResponse.length,
@@ -642,6 +654,7 @@ export async function runWritingWorkflow(
 						readyTask.model || routing.writing.light.model,
 						getFallbackModel(readyTask, routing),
 						writingPrompt,
+						sessionId,
 					);
 					logInfo("writing agent call completed", {
 						taskId: readyTask.id,
@@ -694,6 +707,7 @@ export async function runWritingWorkflow(
 						readyTask.model || routing.writing.light.model,
 						getFallbackModel(readyTask, routing),
 						editingPrompt,
+						sessionId,
 					);
 					logInfo("editing agent call completed", {
 						taskId: readyTask.id,
@@ -746,6 +760,7 @@ export async function runWritingWorkflow(
 						readyTask.model || routing.review.light.model,
 						getFallbackModel(readyTask, routing),
 						reviewPrompt,
+						sessionId,
 					);
 					logInfo("review agent call completed", {
 						taskId: readyTask.id,
@@ -801,6 +816,7 @@ export async function runWritingWorkflow(
 						readyTask.model || routing.improvement.light.model,
 						getFallbackModel(readyTask, routing),
 						improvementPrompt,
+						sessionId,
 					);
 					logInfo("improvement agent call completed", {
 						taskId: readyTask.id,
