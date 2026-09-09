@@ -134,7 +134,7 @@ type StreamEvent =
 	  }
 	| { event: "agent_error"; data: { message: string } };
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 interface QuotaState {
 	limit: number;
@@ -686,20 +686,22 @@ export function ChatPanel({
 		<Card className="flex h-full flex-col">
 			<CardHeader className="items-center">
 				<h2 className="font-semibold text-lg">Agent Chat</h2>
-				<CardAction>
-					<Button
-						variant="ghost"
-						size="sm"
-						className="gap-1.5 text-muted-foreground"
-						disabled={messages.length === 0 || isLoading}
-						onClick={() => setResetDialogOpen(true)}
-						aria-label="Reset chat"
-						title="Clear chat history"
-					>
-						<RotateCcw className="size-4" />
-						Reset
-					</Button>
-				</CardAction>
+				{messages.length > 0 && (
+					<CardAction>
+						<Button
+							variant="ghost"
+							size="sm"
+							className="gap-1.5 text-muted-foreground"
+							disabled={isLoading}
+							onClick={() => setResetDialogOpen(true)}
+							aria-label="Reset chat"
+							title="Clear chat history"
+						>
+							<RotateCcw className="size-4" />
+							Reset
+						</Button>
+					</CardAction>
+				)}
 			</CardHeader>
 			<CardContent className="flex flex-1 flex-col justify-between gap-4 overflow-hidden p-0">
 				<div className="relative min-h-0 flex-1">
