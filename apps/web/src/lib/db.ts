@@ -18,6 +18,7 @@ type DocumentRow = {
 type ChatRow = {
 	id: "current";
 	messages: PersistedChatMessage[];
+	sessionId: string;
 	updatedAt: number;
 };
 
@@ -93,11 +94,59 @@ export async function loadChat(): Promise<PersistedChatMessage[] | undefined> {
 export async function saveChat(
 	messages: PersistedChatMessage[],
 ): Promise<void> {
-	await getDB().chat.put({
-		id: CHAT_ID,
-		messages,
-		updatedAt: Date.now(),
+	const db = getDB();
+	await db.transaction("rw", db.chat, async () => {
+		const existing = await db.chat.get(CHAT_ID);
+		await db.chat.update(CHAT_ID, {
+			messages,
+			updatedAt: Date.now(),
+		});
+		if (!existing) {
+			await db.chat.put({
+				id: CHAT_ID,
+				messages,
+				sessionId: crypto.randomUUID(),
+				updatedAt: Date.now(),
+			});
+		}
 	});
+}
+
+export async function loadSessionId(): Promise<string> {
+	const db = getDB();
+	return db.transaction("rw", db.chat, async () => {
+		const existing = await db.chat.get(CHAT_ID);
+		if (existing?.sessionId) return existing.sessionId;
+
+		const sessionId = crypto.randomUUID();
+		await db.chat.put({
+			id: CHAT_ID,
+			messages: existing?.messages ?? [],
+			sessionId,
+			updatedAt: Date.now(),
+		});
+		return sessionId;
+	});
+}
+
+export async function resetSessionId(): Promise<string> {
+	const db = getDB();
+	const sessionId = crypto.randomUUID();
+	await db.transaction("rw", db.chat, async () => {
+		const updated = await db.chat.update(CHAT_ID, {
+			sessionId,
+			updatedAt: Date.now(),
+		});
+		if (!updated) {
+			await db.chat.put({
+				id: CHAT_ID,
+				messages: [],
+				sessionId,
+				updatedAt: Date.now(),
+			});
+		}
+	});
+	return sessionId;
 }
 
 let seeded = false;
@@ -132,6 +181,7 @@ export async function ensureSeeded(): Promise<void> {
 			await db.chat.put({
 				id: CHAT_ID,
 				messages: [],
+				sessionId: crypto.randomUUID(),
 				updatedAt: now,
 			});
 		}

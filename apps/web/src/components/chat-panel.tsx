@@ -15,7 +15,12 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
+import {
+	Card,
+	CardAction,
+	CardContent,
+	CardHeader,
+} from "@/components/ui/card";
 import {
 	Dialog,
 	DialogContent,
@@ -25,7 +30,13 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { promptSuggestions } from "@/lib/constants/suggestions";
-import { loadChat, type PersistedChatMessage, saveChat } from "@/lib/db";
+import {
+	loadChat,
+	loadSessionId,
+	type PersistedChatMessage,
+	resetSessionId,
+	saveChat,
+} from "@/lib/db";
 import { cn } from "@/lib/utils";
 import { ChainOfThoughtReasoning } from "./chain-of-thought-reasoning";
 import {
@@ -123,7 +134,7 @@ type StreamEvent =
 	  }
 	| { event: "agent_error"; data: { message: string } };
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 interface QuotaState {
 	limit: number;
@@ -157,9 +168,20 @@ export function ChatPanel({
 	const [showScrollBottom, setShowScrollBottom] = useState(false);
 	const [isScrolling, setIsScrolling] = useState(false);
 	const isFirstAutoScroll = useRef(true);
-	const hideButtonsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const hideButtonsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+		null,
+	);
 
 	const persistedMessages = useLiveQuery(() => loadChat(), []);
+	const sessionIdRef = useRef<string>("");
+
+	useEffect(() => {
+		loadSessionId()
+			.then((id) => {
+				sessionIdRef.current = id;
+			})
+			.catch(() => {});
+	}, []);
 
 	useEffect(() => {
 		if (hydratedRef.current) return;
@@ -444,7 +466,7 @@ export function ChatPanel({
 		setDiffReview(null);
 	};
 
-	const handleResetChat = useCallback(() => {
+	const handleResetChat = useCallback(async () => {
 		if (isLoading) return;
 		updateMessages([]);
 		setError(null);
@@ -454,6 +476,11 @@ export function ChatPanel({
 		setInputValue("");
 		setCopied(null);
 		setResetDialogOpen(false);
+		try {
+			sessionIdRef.current = await resetSessionId();
+		} catch {
+			/* keep previous session id if persistence fails */
+		}
 	}, [isLoading, updateMessages]);
 
 	const handleSend = async () => {
@@ -486,6 +513,7 @@ export function ChatPanel({
 				body: JSON.stringify({
 					userPrompt: promptValue,
 					currentDocument,
+					sessionId: sessionIdRef.current || undefined,
 				}),
 			});
 
@@ -658,20 +686,22 @@ export function ChatPanel({
 		<Card className="flex h-full flex-col">
 			<CardHeader className="items-center">
 				<h2 className="font-semibold text-lg">Agent Chat</h2>
-				<CardAction>
-					<Button
-						variant="ghost"
-						size="sm"
-						className="gap-1.5 text-muted-foreground"
-						disabled={messages.length === 0 || isLoading}
-						onClick={() => setResetDialogOpen(true)}
-						aria-label="Reset chat"
-						title="Clear chat history"
-					>
-						<RotateCcw className="size-4" />
-						Reset
-					</Button>
-				</CardAction>
+				{messages.length > 0 && (
+					<CardAction>
+						<Button
+							variant="ghost"
+							size="sm"
+							className="gap-1.5 text-muted-foreground"
+							disabled={isLoading}
+							onClick={() => setResetDialogOpen(true)}
+							aria-label="Reset chat"
+							title="Clear chat history"
+						>
+							<RotateCcw className="size-4" />
+							Reset
+						</Button>
+					</CardAction>
+				)}
 			</CardHeader>
 			<CardContent className="flex flex-1 flex-col justify-between gap-4 overflow-hidden p-0">
 				<div className="relative min-h-0 flex-1">
@@ -683,157 +713,158 @@ export function ChatPanel({
 						className="thin-scrollbar flex h-full w-full flex-col gap-4 overflow-y-auto p-4"
 					>
 						{messages.length > 0 ? (
-						<AnimatePresence mode="popLayout">
-							{messages?.map((message) => (
-								<div
-									key={message.id}
-									className={cn(
-										"flex w-full flex-col gap-2",
-										message.role === "assistant" ? "items-start" : "items-end",
-									)}
-								>
-									{message.role === "assistant" && message.stateData && (
-										<ChainOfThoughtReasoning
-											key={message.id}
-											isLoading={false}
-											stateData={message.stateData}
-											animated={false}
-										/>
-									)}
-									<motion.div
-										initial={{ opacity: 0, y: 10 }}
-										animate={{ opacity: 1, y: 0 }}
-										exit={{ opacity: 0, y: -10 }}
-										transition={{ duration: 0.3, ease: "easeOut" }}
+							<AnimatePresence mode="popLayout">
+								{messages?.map((message) => (
+									<div
+										key={message.id}
 										className={cn(
-											"group flex w-full flex-col gap-2",
-											message.role === "user" ? "items-end" : "items-start",
+											"flex w-full flex-col gap-2",
+											message.role === "assistant"
+												? "items-start"
+												: "items-end",
 										)}
 									>
-										<Message
-											className={message.role === "assistant" ? "w-full" : ""}
+										{message.role === "assistant" && message.stateData && (
+											<ChainOfThoughtReasoning
+												key={message.id}
+												isLoading={false}
+												stateData={message.stateData}
+												animated={false}
+											/>
+										)}
+										<motion.div
+											initial={{ opacity: 0, y: 10 }}
+											animate={{ opacity: 1, y: 0 }}
+											exit={{ opacity: 0, y: -10 }}
+											transition={{ duration: 0.3, ease: "easeOut" }}
+											className={cn(
+												"group flex w-full flex-col gap-2",
+												message.role === "user" ? "items-end" : "items-start",
+											)}
 										>
-											<MessageContent
-												markdown
-												className={cn(
-													message.role === "user"
-														? "bg-primary text-primary-foreground"
-														: "bg-primary-foreground dark:bg-secondary-foreground",
-												)}
+											<Message
+												className={message.role === "assistant" ? "w-full" : ""}
 											>
-												{message.content}
-											</MessageContent>
-										</Message>
-										<MessageActions>
-											<MessageAction tooltip="Copy to clipboard">
-												<Button
-													variant="ghost"
-													size="icon"
-													className="h-8 w-8 rounded-full opacity-0 group-hover:opacity-100"
-													onClick={() =>
-														handleCopy(message.content, message.id)
-													}
+												<MessageContent
+													markdown
+													className={cn(
+														message.role === "user"
+															? "bg-primary text-primary-foreground"
+															: "bg-primary-foreground dark:bg-secondary-foreground",
+													)}
 												>
-													<Copy
-														className={`size-4 ${copied === message.id ? "text-green-500" : ""}`}
-													/>
-												</Button>
-											</MessageAction>
-											{message.role === "assistant" &&
-												message.canReviewDiff && (
-													<MessageAction tooltip="Compare changes with the document">
-														<Button
-															variant="ghost"
-															size="icon"
-															className="w-fit px-2 opacity-0 group-hover:opacity-100"
-															onClick={() => openDiffReview(message.content)}
-														>
-															<CheckLine className="size-4" /> Review Changes
-														</Button>
-													</MessageAction>
-												)}
-										</MessageActions>
-									</motion.div>
-								</div>
-							))}
-						</AnimatePresence>
-					) : (
-						<div className="flex h-full w-full flex-col items-center justify-center gap-8 text-center">
-							<div className="flex flex-col gap-1">
-								<h2 className="font-medium text-xl">
-									Experiment your writings with
-									<span className="font-semibold"> Wavmo </span>
-								</h2>
-								<p className="text-accent-foreground/60 text-sm">
-									Use suggestions to get started or input your prompt below.{" "}
-									<br /> Rate limits may be applied and it will def make
-									mistakes.
-								</p>
-							</div>
-							<div className="flex w-[90%] min-w-sm flex-wrap items-center gap-2">
-								{promptSuggestions?.map((suggestion) => (
-									<PromptSuggestion
-										key={suggestion.slice(0, 10)}
-										size="lg"
-										highlight="true"
-										onClick={() => {
-											setInputValue(suggestion);
-											setTimeout(() => promptInputRef.current?.focus(), 0);
-										}}
-									>
-										{suggestion}
-									</PromptSuggestion>
+													{message.content}
+												</MessageContent>
+											</Message>
+											<MessageActions>
+												<MessageAction tooltip="Copy to clipboard">
+													<Button
+														variant="ghost"
+														size="icon"
+														className="h-8 w-8 rounded-full opacity-0 group-hover:opacity-100"
+														onClick={() =>
+															handleCopy(message.content, message.id)
+														}
+													>
+														<Copy
+															className={`size-4 ${copied === message.id ? "text-green-500" : ""}`}
+														/>
+													</Button>
+												</MessageAction>
+												{message.role === "assistant" &&
+													message.canReviewDiff && (
+														<MessageAction tooltip="Compare changes with the document">
+															<Button
+																variant="ghost"
+																size="icon"
+																className="w-fit px-2 opacity-0 group-hover:opacity-100"
+																onClick={() => openDiffReview(message.content)}
+															>
+																<CheckLine className="size-4" /> Review Changes
+															</Button>
+														</MessageAction>
+													)}
+											</MessageActions>
+										</motion.div>
+									</div>
 								))}
+							</AnimatePresence>
+						) : (
+							<div className="flex h-full w-full flex-col items-center justify-center gap-8 text-center">
+								<div className="flex flex-col gap-1">
+									<h2 className="font-medium text-xl">
+										Experiment your writings with
+										<span className="font-semibold"> Wavmo </span>
+									</h2>
+									<p className="text-accent-foreground/60 text-sm">
+										Use suggestions to get started or input your prompt below.{" "}
+										<br /> Rate limits may be applied and it will def make
+										mistakes.
+									</p>
+								</div>
+								<div className="flex w-[90%] min-w-sm flex-wrap items-center gap-2">
+									{promptSuggestions?.map((suggestion) => (
+										<PromptSuggestion
+											key={suggestion.slice(0, 10)}
+											size="lg"
+											highlight="true"
+											onClick={() => {
+												setInputValue(suggestion);
+												setTimeout(() => promptInputRef.current?.focus(), 0);
+											}}
+										>
+											{suggestion}
+										</PromptSuggestion>
+									))}
+								</div>
 							</div>
+						)}
+
+						{isLoading && (
+							<ChainOfThoughtReasoning
+								isLoading={isLoading}
+								stateData={activeState}
+								streamTasks={activeTasks}
+							/>
+						)}
+						{error && (
+							<SystemMessage variant="error" fill>
+								Unable to generate response, seems like a error from our side,
+								please try again.
+							</SystemMessage>
+						)}
+					</div>
+
+					{/* Scroll buttons - stacked at bottom-right, show only when scrolling */}
+					{isScrolling && (
+						<div className="absolute right-4 bottom-4 z-10 flex flex-col gap-1">
+							{showScrollTop && (
+								<Button
+									variant="outline"
+									size="icon"
+									className="h-7 w-7 rounded-full bg-background/80 shadow-md backdrop-blur-sm hover:bg-background"
+									onClick={scrollToTop}
+								>
+									<ChevronUp className="size-4" />
+								</Button>
+							)}
+							{showScrollBottom && (
+								<Button
+									variant="outline"
+									size="icon"
+									className="h-7 w-7 rounded-full bg-background/80 shadow-md backdrop-blur-sm hover:bg-background"
+									onClick={scrollToBottom}
+								>
+									<ChevronDown className="size-4" />
+								</Button>
+							)}
 						</div>
 					)}
-
-					{isLoading && (
-						<ChainOfThoughtReasoning
-							isLoading={isLoading}
-							stateData={activeState}
-							streamTasks={activeTasks}
-						/>
-					)}
-					{error && (
-						<SystemMessage variant="error" fill>
-							Unable to generate response, seems like a error from our side,
-							please try again.
-						</SystemMessage>
-					)}
-
-				</div>
-
-				{/* Scroll buttons - stacked at bottom-right, show only when scrolling */}
-				{isScrolling && (
-					<div className="absolute bottom-4 right-4 z-10 flex flex-col gap-1">
-						{showScrollTop && (
-							<Button
-								variant="outline"
-								size="icon"
-								className="h-7 w-7 rounded-full bg-background/80 backdrop-blur-sm shadow-md hover:bg-background"
-								onClick={scrollToTop}
-							>
-								<ChevronUp className="size-4" />
-							</Button>
-						)}
-						{showScrollBottom && (
-							<Button
-								variant="outline"
-								size="icon"
-								className="h-7 w-7 rounded-full bg-background/80 backdrop-blur-sm shadow-md hover:bg-background"
-								onClick={scrollToBottom}
-							>
-								<ChevronDown className="size-4" />
-							</Button>
-						)}
-						</div>
-				)}
 				</div>
 
 				<div className="relative mx-auto mb-4 w-[85%] min-w-sm">
 					{quota && quota.remaining <= 3 && (
-						<div className="absolute left-1/2 top-0 w-max -translate-x-1/2 -translate-y-[90%]">
+						<div className="-translate-x-1/2 -translate-y-[90%] absolute top-0 left-1/2 w-max">
 							<QuotaPill quota={quota} />
 						</div>
 					)}
