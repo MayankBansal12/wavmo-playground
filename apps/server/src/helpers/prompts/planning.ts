@@ -14,7 +14,7 @@ CURRENT DOCUMENT:
 ${documentContext}
 
 GOAL:
-Extract intent, requirements, outline, tone, constraints, optional search queries, and a model routing plan. Create a concise TODO list of tasks needed to fulfill the request.
+Extract intent, requirements, outline, tone, constraints, and optional search queries. Create a concise TODO list of tasks needed to fulfill the request.
 
 TASK RULES:
 - Tasks must be only: research, write, edit, review, improve
@@ -26,10 +26,9 @@ TASK RULES:
 - The tasks must be ordered and can include dependencies (use stable ids like t1, t2, t3)
 - Keep task list minimal and focused on writing/research only
 - For every task that needs an LLM, choose a difficulty label of \`light\` or \`high_end\`
-- Prefer the lightest model that still fits the task quality requirements
 - Mark tasks as \`high_end\` only when the task is nuanced, high-stakes, highly structured, or needs stronger reasoning and style control
 - Mark tasks as \`light\` for routine, straightforward, or low-risk work
-- Include a "model_strategy" object that explicitly maps planning, writing, review, research, and improvement routing
+- Model selection is configured by the server; do not choose models
 
 INSTRUCTIONS:
 - Be concise and avoid unnecessary wording
@@ -47,23 +46,6 @@ JSON SCHEMA:
   "constraints": "string - word limits, format requirements, etc",
   "optional_search_queries": ["array of search queries if research needed"],
   "mode": "write | edit | review | research",
-  "model_strategy": {
-    "allowed_models": ["minimax-m3", "deepseek-v4-flash"],
-    "planning": { "primary": "string", "fallback": "string" },
-    "writing": {
-      "high_end": { "model": "string", "difficulty": "high_end" },
-      "light": { "model": "string", "difficulty": "light" }
-    },
-    "review": {
-      "high_end": { "model": "string", "difficulty": "high_end" },
-      "light": { "model": "string", "difficulty": "light" }
-    },
-    "research": { "primary": "string", "fallback": "string" },
-    "improvement": {
-      "high_end": { "model": "string", "difficulty": "high_end" },
-      "light": { "model": "string", "difficulty": "light" }
-    }
-  },
   "tasks": [
     {
       "id": "string",
@@ -72,8 +54,7 @@ JSON SCHEMA:
       "description": "string",
       "depends_on": ["array of task ids"],
       "status": "pending",
-      "difficulty": "light | high_end",
-      "model": "string - one of: minimax-m3, deepseek-v4-flash"
+      "difficulty": "light | high_end"
     }
   ],
   "needs_review": "boolean",

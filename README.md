@@ -65,6 +65,7 @@ Server variables:
 ```env
 OPENCODE_API_KEY=your_opencode_go_api_key
 OPENCODE_API_BASE_URL=https://opencode.ai/zen/go/v1
+OPENCODE_MODEL=minimax-m3
 PORT=8000
 CORS_ORIGIN=http://localhost:3001
 
@@ -74,6 +75,11 @@ RATE_LIMIT_DEFAULT=5
 RATE_LIMIT_WINDOW_SECONDS=86400
 RATE_LIMIT_BYPASS_DEFAULT_LIMIT=200
 ```
+
+`OPENCODE_MODEL` selects the model for all LLM tasks (default: `minimax-m3`).
+Restart the server after changing it. The previous per-task `OPENCODE_MODEL_*`
+variables are no longer used; replace them with this single setting. Failed
+requests retry once using the same model.
 
 - For Client
 Copy the example file and set your values:

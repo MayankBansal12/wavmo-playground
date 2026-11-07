@@ -1,34 +1,6 @@
 export type TaskType = "research" | "write" | "edit" | "review" | "improve";
 export type TaskDifficulty = "light" | "high_end";
 
-export interface ModelRoutingChoice {
-	model: string;
-	difficulty: TaskDifficulty;
-}
-
-export interface ModelRoutingPlan {
-	planning: {
-		primary: string;
-		fallback: string;
-	};
-	writing: {
-		high_end: ModelRoutingChoice;
-		light: ModelRoutingChoice;
-	};
-	review: {
-		high_end: ModelRoutingChoice;
-		light: ModelRoutingChoice;
-	};
-	research: {
-		primary: string;
-		fallback: string;
-	};
-	improvement: {
-		high_end: ModelRoutingChoice;
-		light: ModelRoutingChoice;
-	};
-}
-
 export type TaskStatus = "pending" | "running" | "done" | "failed" | "skipped";
 
 export interface WritingTask {
@@ -52,7 +24,6 @@ export interface WritingPlan {
 	optional_search_queries?: string[];
 	mode?: "write" | "edit" | "review" | "research";
 	tasks?: WritingTask[];
-	model_strategy?: ModelRoutingPlan;
 	needs_review?: boolean;
 	needs_improvement?: boolean;
 	edit_scope?: "none" | "small" | "medium" | "large";
