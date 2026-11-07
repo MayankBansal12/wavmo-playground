@@ -7,8 +7,6 @@ import { createWritingPrompt } from "./helpers/prompts/writing";
 import { parseJSON } from "./helpers/utils";
 import type {
 	FinalDocument,
-	ModelRoutingChoice,
-	ModelRoutingPlan,
 	TaskStatus,
 	TaskType,
 	WritingAgentState,
@@ -51,6 +49,8 @@ const openCodeEndpoint =
 	process.env.OPENCODE_API_BASE_URL || "https://opencode.ai/zen/go/v1";
 const openCodeApiKey = process.env.OPENCODE_API_KEY || "";
 const openCodeUserAgent = process.env.OPENCODE_USER_AGENT || "wavmo-server/1.0";
+
+const openCodeModel = process.env.OPENCODE_MODEL?.trim() || "minimax-m3";
 
 const usesAnthropicMessagesApi = (model: string) =>
 	model.startsWith("minimax-") || model.startsWith("qwen3.");
@@ -138,181 +138,15 @@ const invokeAgent = async (
 	return content;
 };
 
-const resolveModel = (fallback: string, envKey: string) =>
-	process.env[envKey] || fallback;
-
-const modelRoutes = {
-	planning: {
-		primary: resolveModel("minimax-m3", "OPENCODE_MODEL_PLANNING"),
-		fallback: resolveModel(
-			"deepseek-v4-flash",
-			"OPENCODE_MODEL_PLANNING_FALLBACK",
-		),
-	},
-	writing: {
-		high_end: resolveModel("minimax-m3", "OPENCODE_MODEL_WRITER_HIGH_END"),
-		light: resolveModel("deepseek-v4-flash", "OPENCODE_MODEL_WRITER_LIGHT"),
-	},
-	review: {
-		high_end: resolveModel("minimax-m3", "OPENCODE_MODEL_REVIEW_HIGH_END"),
-		light: resolveModel("deepseek-v4-flash", "OPENCODE_MODEL_REVIEW_LIGHT"),
-	},
-	improvement: {
-		high_end: resolveModel("minimax-m3", "OPENCODE_MODEL_IMPROVEMENT_HIGH_END"),
-		light: resolveModel(
-			"deepseek-v4-flash",
-			"OPENCODE_MODEL_IMPROVEMENT_LIGHT",
-		),
-	},
-	research: {
-		primary: resolveModel("minimax-m3", "OPENCODE_MODEL_RESEARCH"),
-		fallback: resolveModel(
-			"deepseek-v4-flash",
-			"OPENCODE_MODEL_RESEARCH_FALLBACK",
-		),
-	},
-};
-
-const defaultModelRouting: ModelRoutingPlan = {
-	planning: modelRoutes.planning,
-	writing: {
-		high_end: { model: modelRoutes.writing.high_end, difficulty: "high_end" },
-		light: { model: modelRoutes.writing.light, difficulty: "light" },
-	},
-	review: {
-		high_end: { model: modelRoutes.review.high_end, difficulty: "high_end" },
-		light: { model: modelRoutes.review.light, difficulty: "light" },
-	},
-	research: modelRoutes.research,
-	improvement: {
-		high_end: {
-			model: modelRoutes.improvement.high_end,
-			difficulty: "high_end",
-		},
-		light: { model: modelRoutes.improvement.light, difficulty: "light" },
-	},
-};
-
-const resolveModelRouting = (routing?: ModelRoutingPlan): ModelRoutingPlan => {
-	const normalizeChoice = (
-		fallback: ModelRoutingChoice,
-		choice?: Partial<ModelRoutingChoice>,
-	): ModelRoutingChoice => ({
-		model: choice?.model || fallback.model,
-		difficulty: choice?.difficulty || fallback.difficulty,
-	});
-
-	return {
-		planning: {
-			primary:
-				routing?.planning?.primary || defaultModelRouting.planning.primary,
-			fallback:
-				routing?.planning?.fallback || defaultModelRouting.planning.fallback,
-		},
-		writing: {
-			high_end: normalizeChoice(
-				defaultModelRouting.writing.high_end,
-				routing?.writing?.high_end,
-			),
-			light: normalizeChoice(
-				defaultModelRouting.writing.light,
-				routing?.writing?.light,
-			),
-		},
-		review: {
-			high_end: normalizeChoice(
-				defaultModelRouting.review.high_end,
-				routing?.review?.high_end,
-			),
-			light: normalizeChoice(
-				defaultModelRouting.review.light,
-				routing?.review?.light,
-			),
-		},
-		research: {
-			primary:
-				routing?.research?.primary || defaultModelRouting.research.primary,
-			fallback:
-				routing?.research?.fallback || defaultModelRouting.research.fallback,
-		},
-		improvement: {
-			high_end: normalizeChoice(
-				defaultModelRouting.improvement!.high_end,
-				routing?.improvement?.high_end,
-			),
-			light: normalizeChoice(
-				defaultModelRouting.improvement!.light,
-				routing?.improvement?.light,
-			),
-		},
-	};
-};
-
-const resolveTaskRouting = (
-	task: WritingTask,
-	plan: WritingPlan,
-	routing: ModelRoutingPlan,
-): ModelRoutingChoice => {
-	const requestedDifficulty = task.difficulty;
-	const inferredDifficulty =
-		requestedDifficulty ||
-		(task.type === "review"
-			? plan.needs_review === false
-				? "light"
-				: "high_end"
-			: task.type === "improve"
-				? plan.needs_improvement === false
-					? "light"
-					: "high_end"
-				: plan.edit_scope === "large"
-					? "high_end"
-					: "light");
-
-	if (task.type === "review") {
-		return routing.review[inferredDifficulty];
-	}
-	if (
-		task.type === "improve" ||
-		task.type === "edit" ||
-		task.type === "write"
-	) {
-		return routing.writing[inferredDifficulty];
-	}
-	return {
-		model: routing.research.primary,
-		difficulty: "light",
-	};
-};
-
-const getFallbackModel = (
-	task: WritingTask,
-	routing: ModelRoutingPlan,
-): string => {
-	if (task.type === "review") {
-		return task.difficulty === "high_end"
-			? routing.review.light.model
-			: routing.review.high_end.model;
-	}
-
-	if (task.type === "research") {
-		return routing.research.fallback;
-	}
-
-	return task.difficulty === "high_end"
-		? routing.writing.light.model
-		: routing.writing.high_end.model;
-};
-
-const withFallback = async (
-	primary: string,
-	fallback: string,
+// Retry once with the same configured model on request failure.
+const invokeWithRetry = async (
 	prompt: string,
 	sessionId: string,
 ): Promise<string> => {
 	try {
-		return await invokeAgent(primary, prompt, sessionId);
+		return await invokeAgent(openCodeModel, prompt, sessionId);
 	} catch {
-		return await invokeAgent(fallback, prompt, sessionId);
+		return await invokeAgent(openCodeModel, prompt, sessionId);
 	}
 };
 
@@ -342,11 +176,7 @@ const getErrorDetails = (error: unknown) => {
 	return { error };
 };
 
-const runResearch = async (
-	queries: string[],
-	_primaryModel: string,
-	_fallbackModel: string,
-): Promise<string> => {
+const runResearch = async (queries: string[]): Promise<string> => {
 	const apiKey = process.env.FIRECRAWL_API_KEY || "";
 	if (!apiKey || queries.length === 0) return "";
 
@@ -513,15 +343,9 @@ export async function runWritingWorkflow(
 	let planningResponse: string;
 	try {
 		logInfo("planning agent call started", {
-			model: modelRoutes.planning.primary,
-			fallbackModel: modelRoutes.planning.fallback,
+			model: openCodeModel,
 		});
-		planningResponse = await withFallback(
-			modelRoutes.planning.primary,
-			modelRoutes.planning.fallback,
-			planningPrompt,
-			sessionId,
-		);
+		planningResponse = await invokeWithRetry(planningPrompt, sessionId);
 		logInfo("planning agent call completed", {
 			responseLength: planningResponse.length,
 		});
@@ -541,15 +365,10 @@ export async function runWritingWorkflow(
 		maxCalls: plan.stop_conditions?.max_calls ?? 8,
 	});
 
-	const routing = resolveModelRouting(plan.model_strategy);
-	const tasks = sanitizeTasks(pickTasks(plan)).map((task) => {
-		const routed = resolveTaskRouting(task, plan, routing);
-		return {
-			...task,
-			difficulty: task.difficulty || routed.difficulty,
-			model: task.model || routed.model,
-		};
-	});
+	const tasks = sanitizeTasks(pickTasks(plan)).map((task) => ({
+		...task,
+		model: task.type === "research" ? undefined : openCodeModel,
+	}));
 	const maxCalls = plan.stop_conditions?.max_calls ?? 8;
 	logInfo("tasks sanitized", {
 		taskCount: tasks.length,
@@ -564,7 +383,7 @@ export async function runWritingWorkflow(
 	const state: WritingAgentState = {
 		userPrompt,
 		currentDocument,
-		plan: { ...plan, tasks, model_strategy: routing },
+		plan: { ...plan, tasks },
 	};
 
 	streamHandler?.({ event: "plan", data: { plan: state.plan as WritingPlan } });
@@ -616,14 +435,8 @@ export async function runWritingWorkflow(
 					logInfo("research agent started", {
 						taskId: readyTask.id,
 						queryCount: queries.length,
-						model: routing.research.primary,
-						fallbackModel: routing.research.fallback,
 					});
-					const researchSummary = await runResearch(
-						queries,
-						routing.research.primary,
-						routing.research.fallback,
-					);
+					const researchSummary = await runResearch(queries);
 					researchContext = researchSummary;
 					readyTask.outputs = { researchSummary };
 					readyTask.status = "done";
@@ -650,9 +463,7 @@ export async function runWritingWorkflow(
 						model: readyTask.model,
 						difficulty: readyTask.difficulty,
 					});
-					const writingResponse = await withFallback(
-						readyTask.model || routing.writing.light.model,
-						getFallbackModel(readyTask, routing),
+					const writingResponse = await invokeWithRetry(
 						writingPrompt,
 						sessionId,
 					);
@@ -703,9 +514,7 @@ export async function runWritingWorkflow(
 						model: readyTask.model,
 						difficulty: readyTask.difficulty,
 					});
-					const editingResponse = await withFallback(
-						readyTask.model || routing.writing.light.model,
-						getFallbackModel(readyTask, routing),
+					const editingResponse = await invokeWithRetry(
 						editingPrompt,
 						sessionId,
 					);
@@ -756,12 +565,7 @@ export async function runWritingWorkflow(
 						model: readyTask.model,
 						difficulty: readyTask.difficulty,
 					});
-					const reviewResponse = await withFallback(
-						readyTask.model || routing.review.light.model,
-						getFallbackModel(readyTask, routing),
-						reviewPrompt,
-						sessionId,
-					);
+					const reviewResponse = await invokeWithRetry(reviewPrompt, sessionId);
 					logInfo("review agent call completed", {
 						taskId: readyTask.id,
 						responseLength: reviewResponse.length,
@@ -812,9 +616,7 @@ export async function runWritingWorkflow(
 						model: readyTask.model,
 						difficulty: readyTask.difficulty,
 					});
-					const improvementResponse = await withFallback(
-						readyTask.model || routing.improvement.light.model,
-						getFallbackModel(readyTask, routing),
+					const improvementResponse = await invokeWithRetry(
 						improvementPrompt,
 						sessionId,
 					);
